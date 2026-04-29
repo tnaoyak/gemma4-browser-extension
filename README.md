@@ -2,6 +2,8 @@
 
 [日本語版](./README.ja.md)
 
+This repository is a fork of [nico-martin/gemma4-browser-extension](https://github.com/nico-martin/gemma4-browser-extension) and is maintained for personal experimentation and customization.
+
 ## About this extension
 
 An on-device AI assistant that runs entirely in your browser using WebGPU and Transformers.js. This Chrome extension provides an intelligent agent that can understand natural language commands and interact with your browser through a set of specialized tools.

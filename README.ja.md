@@ -2,6 +2,8 @@
 
 [English](./README.md)
 
+このリポジトリは [nico-martin/gemma4-browser-extension](https://github.com/nico-martin/gemma4-browser-extension) のフォークであり、個人での検証・改修用途として運用しています。
+
 ## この拡張機能について
 
 WebGPU と Transformers.js を使って、ブラウザ内で完全に動作するオンデバイスAIアシスタントです。  
