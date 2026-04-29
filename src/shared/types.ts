@@ -12,6 +12,8 @@ export enum BackgroundTasks {
   AGENT_GENERATE_TEXT,
   AGENT_GET_MESSAGES,
   AGENT_CLEAR,
+  REPORT_USER_ACTIVITY,
+  SIDEPANEL_HEARTBEAT,
 }
 
 export enum BackgroundMessages {
@@ -59,6 +61,8 @@ export interface ChatMessageAssistant {
 }
 
 export type ChatMessage = ChatMessageUser | ChatMessageAssistant;
+
+export type UserActivityEventType = "scroll" | "click";
 
 export interface WebsitePart {
   tagName: string;

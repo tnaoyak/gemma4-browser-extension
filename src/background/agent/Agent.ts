@@ -232,7 +232,10 @@ class Agent {
     return { text: response, metrics };
   };
 
-  public runAgent = async (prompt: string): Promise<AgentRunMetrics> => {
+  public runAgent = async (
+    prompt: string,
+    options: { includeUserMessage?: boolean } = {}
+  ): Promise<AgentRunMetrics> => {
     let roleForGeneration: "user" | "tool" = "user";
     let appendPromptMessage = true;
     const start = performance.now();
@@ -240,12 +243,12 @@ class Agent {
     let prefillTokens = 0;
     let prefillMs = 0;
     let decodeMs = 0;
+    const includeUserMessage = options.includeUserMessage ?? true;
 
-    this.chatMessages = [
-      ...this.chatMessages,
-      { role: "user", content: prompt },
-    ];
-    const prevChatMessages = this.chatMessages;
+    const prevChatMessages = includeUserMessage
+      ? [...this.chatMessages, { role: "user" as const, content: prompt }]
+      : [...this.chatMessages];
+    this.chatMessages = prevChatMessages;
     const assistantMessage: ChatMessageAssistant = {
       role: "assistant",
       content: "",

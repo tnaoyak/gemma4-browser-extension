@@ -2,15 +2,15 @@
 
 ## 1. ドキュメント情報
 - 作成日: 2026-04-29
-- 最終更新: 2026-04-29 21:24:10
-- ステータス: ドラフト
+- 最終更新: 2026-04-29 22:22:22
+- ステータス: 実装反映済み
 - 対象: Chrome拡張 `gemma4-browser-extension`
 
 ## 2. 設計方針
 要件定義で確定した次の条件を満たすことを最優先とする。
 
 1. サイドパネル開中のみ話しかける
-2. 発話判定は複合条件（3分滞在、アクティブタブ、スクロール/クリック、クールダウン）
+2. 発話判定は複合条件（1分滞在、アクティブタブ、スクロール/クリック、クールダウン）
 3. 見た目は通常assistantメッセージと同一
 4. 文体はカジュアル
 
@@ -20,9 +20,10 @@
   - 目的: Service Workerの寿命に依存しない周期判定
 
 ### 3.2 `src/sidebar/App.tsx`
-- サイドパネル初期化時に `chrome.runtime.connect({ name: "sidepanel" })` を開始
+- サイドパネル初期化時に `chrome.runtime.connect({ name: "gemma4-sidepanel" })` を開始
 - アンマウント時に port を切断
-- （任意）接続維持のため heartbeat 送信を検討
+- `port.onDisconnect` で自動再接続する
+- `SIDEPANEL_HEARTBEAT` を15秒間隔で送信する
 
 ### 3.3 `src/sidebar/chat/Chat.tsx`
 - 初回マウント時の無条件 `AGENT_CLEAR` を削除または条件化
@@ -30,14 +31,21 @@
 
 ### 3.4 `src/background/background.ts`
 - サイドパネル接続状態の管理（`runtime.onConnect` / `port.onDisconnect`）
+- heartbeat受信時刻を管理し、Service Worker再起動時の判定取りこぼしを補完
 - 滞在判定用状態の管理（タブ・URL単位）
 - `chrome.alarms` で定期評価
 - 条件を満たしたらプロアクティブ発話を生成
+- モデル実行は単一キューで直列化し、同時実行を防ぐ
 
 ### 3.5 `src/background/agent/Agent.ts`
 - 「ユーザー起点ではない発話」を追加するAPIを新設
   - 例: `runProactiveAgent(prompt: string)`（名称は実装時決定）
 - 既存 `runAgent()` は手動チャット用として維持
+
+### 3.6 `src/background/tools/askWebsite.ts`
+- WebsiteContentManager は `ask_website` 初回実行まで遅延初期化する
+- `tabs.sendMessage` が受信エンド不在で失敗した場合は警告ログへ降格し、ページ同期をスキップする
+- 同一URLでの重複警告は抑制する
 
 ## 4. イベント設計
 ## 4.1 入力イベント
@@ -47,14 +55,16 @@
    - URL遷移完了時に滞在計測をリセットする
 3. `runtime.onConnect(name=sidepanel)`
    - パネル開状態を `true` 相当に遷移
-4. `runtime.onMessage(type=user_activity)`（新規）
+4. `runtime.onMessage(type=sidepanel_heartbeat)`（新規）
+   - パネル開状態のTTL更新に使用
+5. `runtime.onMessage(type=user_activity)`（新規）
    - content script からスクロール/クリック発生を受信
-5. `alarms.onAlarm(name=proactive-check)`（新規）
+6. `alarms.onAlarm(name=proactive-check)`（新規）
    - 条件評価と発話判定を実行
 
 ## 4.2 評価周期
 - `chrome.alarms.create("proactive-check", { periodInMinutes: 1 })`
-- 最短1分間隔で評価し、3分到達判定を行う
+- 最短1分間隔で評価し、1分到達判定を行う
 
 ## 5. 状態設計
 ## 5.1 メモリ状態（background）
@@ -71,6 +81,7 @@ type TabEngagementState = {
 ```ts
 type ProactiveState = {
   panelConnectionCount: number;  // runtime.connect の接続数
+  lastPanelHeartbeatAt: number|null; // heartbeat 最終受信時刻
   lastGlobalProactiveAt: number|null;
   promptedUrlSet: Set<string>;   // 同一URL 1回/セッション制御
 };
@@ -79,9 +90,9 @@ type ProactiveState = {
 ## 5.2 判定条件
 `shouldProactivelySpeak(tabState, proactiveState, now)` は以下をすべて満たすと `true`:
 
-1. `panelConnectionCount > 0`
+1. `panelConnectionCount > 0` または `lastPanelHeartbeatAt` がTTL以内
 2. 対象タブがアクティブで `http(s)` URL
-3. `now - activeSince >= 3分`
+3. `now - activeSince >= 1分`
 4. `hasInteraction === true`
 5. `url` が `promptedUrlSet` に未登録
 6. `lastGlobalProactiveAt` が `null` または `now - lastGlobalProactiveAt >= 10分`
@@ -116,10 +127,11 @@ type ProactiveState = {
 - 発話生成に失敗しても既存チャット機能へ影響させない
 - 条件判定やメッセージ送信の例外は握りつぶさず `console.error` へ記録
 - 失敗時は `promptedUrlSet` への登録を行わず、次回評価に再試行余地を残す
+- `runAgent` と `extractFeatures` を同一キューで直列化し、WebGPU同時実行による不安定化を防ぐ
 
 ## 9. テスト観点
-1. パネル閉時に3分経過しても発話しない
-2. パネル開時に3分+操作ありで発話する
+1. パネル閉時に1分経過しても発話しない
+2. パネル開時に1分+操作ありで発話する
 3. 同一URLで2回目の発話が起きない
 4. 10分未満では別URLでも発話しない
 5. `/clear` 実行時のみ履歴が消える

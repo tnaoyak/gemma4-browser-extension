@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { SIDEPANEL_PORT_NAME } from "../shared/constants.ts";
 import {
   BackgroundMessages,
   BackgroundTasks,
@@ -26,6 +27,40 @@ export default function App() {
   const [downloadingModels, setDownloadingModels] = useState<
     Record<string, number>
   >({});
+
+  useEffect(() => {
+    let isMounted = true;
+    let port: chrome.runtime.Port | null = null;
+
+    const sendHeartbeat = () => {
+      chrome.runtime.sendMessage(
+        { type: BackgroundTasks.SIDEPANEL_HEARTBEAT },
+        () => {
+          // Ignore transient errors when service worker restarts.
+          void chrome.runtime.lastError;
+        }
+      );
+    };
+
+    const connect = () => {
+      if (!isMounted) return;
+      port = chrome.runtime.connect({ name: SIDEPANEL_PORT_NAME });
+      port.onDisconnect.addListener(() => {
+        if (!isMounted) return;
+        setTimeout(connect, 500);
+      });
+    };
+
+    connect();
+    sendHeartbeat();
+    const heartbeatTimer = window.setInterval(sendHeartbeat, 15_000);
+
+    return () => {
+      isMounted = false;
+      window.clearInterval(heartbeatTimer);
+      port?.disconnect();
+    };
+  }, []);
 
   useEffect(() => {
     setStatus(AppStatus.CHECKING);

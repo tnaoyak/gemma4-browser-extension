@@ -2,17 +2,34 @@ import { ContentTasks, WebsitePart } from "../../shared/types.ts";
 import { WebMCPTool } from "../agent/webMcp.tsx";
 import FeatureExtractor from "../utils/FeatureExtractor.ts";
 
+const NO_RECEIVER_ERROR_TEXT = "Receiving end does not exist";
+const CONNECTION_ERROR_TEXT = "Could not establish connection";
+const isNoReceiverError = (error: unknown): boolean => {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes(NO_RECEIVER_ERROR_TEXT) ||
+    message.includes(CONNECTION_ERROR_TEXT)
+  );
+};
+
 class WebsiteContentManager {
   private currentPageParts: WebsitePart[] = [];
   private featureExtractor: FeatureExtractor;
   private loadingPromise: Promise<void> | null = null;
   private currentTabId: number | null = null;
   private currentUrl: string | null = null;
+  private initialized = false;
+  private warnedUnavailableUrls = new Set<string>();
 
   constructor(featureExtractor: FeatureExtractor) {
     this.featureExtractor = featureExtractor;
+  }
+
+  private initializeIfNeeded(): void {
+    if (this.initialized) return;
+    this.initialized = true;
     this.setupListeners();
-    this.initializeCurrentTab();
+    void this.initializeCurrentTab();
   }
 
   private async initializeCurrentTab(): Promise<void> {
@@ -31,9 +48,13 @@ class WebsiteContentManager {
 
   private setupListeners(): void {
     chrome.tabs.onActivated.addListener(async (activeInfo) => {
-      const tab = await chrome.tabs.get(activeInfo.tabId);
-      if (tab.url?.startsWith("http")) {
-        this.loadPageForTab(activeInfo.tabId, tab.url);
+      try {
+        const tab = await chrome.tabs.get(activeInfo.tabId);
+        if (tab.url?.startsWith("http")) {
+          this.loadPageForTab(activeInfo.tabId, tab.url);
+        }
+      } catch (error) {
+        console.warn("[ask_website] Could not read activated tab:", error);
       }
     });
 
@@ -64,6 +85,8 @@ class WebsiteContentManager {
   }
 
   async loadCurrentPage(): Promise<void> {
+    this.initializeIfNeeded();
+
     if (this.loadingPromise) {
       return this.loadingPromise;
     }
@@ -93,11 +116,27 @@ class WebsiteContentManager {
 
     await new Promise((resolve) => setTimeout(resolve, 500));
 
-    const response = await chrome.tabs.sendMessage(tabId, {
-      type: ContentTasks.EXTRACT_PAGE_DATA,
-    });
+    let response: { parts?: Array<WebsitePart> } | undefined;
+    try {
+      response = await chrome.tabs.sendMessage(tabId, {
+        type: ContentTasks.EXTRACT_PAGE_DATA,
+      });
+    } catch (error) {
+      if (isNoReceiverError(error)) {
+        this.currentPageParts = [];
+        const unavailableUrl = this.currentUrl || "unknown-url";
+        if (!this.warnedUnavailableUrls.has(unavailableUrl)) {
+          this.warnedUnavailableUrls.add(unavailableUrl);
+          console.warn(
+            `[ask_website] Content script unavailable for ${unavailableUrl}. Skipping page sync.`
+          );
+        }
+        return;
+      }
+      throw error;
+    }
 
-    const parts = response.parts as Array<WebsitePart>;
+    const parts = Array.isArray(response?.parts) ? response.parts : [];
 
     await Promise.all(
       parts.map(async (part, i) => {
@@ -179,7 +218,13 @@ let websiteContentManager: WebsiteContentManager | null = null;
 export const createAskWebsiteTool = (
   featureExtractor: FeatureExtractor
 ): WebMCPTool => {
-  websiteContentManager = new WebsiteContentManager(featureExtractor);
+  const getOrCreateWebsiteContentManager = () => {
+    if (!websiteContentManager) {
+      websiteContentManager = new WebsiteContentManager(featureExtractor);
+    }
+
+    return websiteContentManager;
+  };
 
   return {
     name: "ask_website",
@@ -210,12 +255,10 @@ export const createAskWebsiteTool = (
         return `Error: query parameter must be a non-empty string. Received: ${JSON.stringify(args)}`;
       }
 
-      if (!websiteContentManager) {
-        return "Error: Website content manager not initialized";
-      }
+      const manager = getOrCreateWebsiteContentManager();
 
       try {
-        const results = await websiteContentManager.search(query, topK);
+        const results = await manager.search(query, topK);
 
         if (results.length === 0) {
           return "No relevant content found on the current page.";

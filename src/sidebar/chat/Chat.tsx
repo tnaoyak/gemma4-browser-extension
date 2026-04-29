@@ -104,15 +104,17 @@ export default function Chat() {
       }
     );
 
-    chrome.runtime.sendMessage({
-      type: BackgroundTasks.AGENT_CLEAR,
-    });
-
-    chrome.runtime.onMessage.addListener((message) => {
+    const listener = (message: any) => {
       if (message.type === BackgroundMessages.MESSAGES_UPDATE) {
         setMessages(message.messages);
       }
-    });
+    };
+
+    chrome.runtime.onMessage.addListener(listener);
+
+    return () => {
+      chrome.runtime.onMessage.removeListener(listener);
+    };
   }, []);
 
   // Forward keyboard events to ChatCommands

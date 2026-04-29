@@ -51,3 +51,5 @@ export const REQUIRED_MODEL_IDS = [
   MODELS[FEATURE_EXTRACTION_ID].modelId,
   MODELS[TEXT_GENERATION_ID].modelId,
 ];
+
+export const SIDEPANEL_PORT_NAME = "gemma4-sidepanel";
