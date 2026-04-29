@@ -1,5 +1,7 @@
 # Transformers.js Gemma 4 Browser Assistant
 
+[日本語版](./README.ja.md)
+
 ## About this extension
 
 An on-device AI assistant that runs entirely in your browser using WebGPU and Transformers.js. This Chrome extension provides an intelligent agent that can understand natural language commands and interact with your browser through a set of specialized tools.
