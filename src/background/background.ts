@@ -9,8 +9,10 @@ import { AvailableTools } from "../shared/tools.ts";
 import {
   BackgroundMessages,
   BackgroundTasks,
+  ContentTasks,
   ResponseStatus,
   UserActivityEventType,
+  WebsitePart,
 } from "../shared/types.ts";
 import Agent from "./agent/Agent.ts";
 import {
@@ -51,6 +53,8 @@ const PROACTIVE_ALARM_NAME = "proactive-check";
 const PROACTIVE_MIN_DWELL_MS = 1 * 60 * 1000;
 const PROACTIVE_GLOBAL_COOLDOWN_MS = 10 * 60 * 1000;
 const SIDEPANEL_HEARTBEAT_TTL_MS = 35_000;
+const PROACTIVE_CONTEXT_MAX_ITEMS = 4;
+const PROACTIVE_CONTEXT_MAX_CHARS = 120;
 
 type EngagementState = {
   tabId: number;
@@ -176,15 +180,69 @@ const shouldTriggerProactiveMessage = (now: number) => {
   return true;
 };
 
-const createProactivePrompt = (tabTitle: string, url: string): string =>
-  [
+const normalizeText = (value: string): string =>
+  value.replace(/\s+/g, " ").trim();
+
+const truncateText = (value: string, maxChars: number): string =>
+  value.length > maxChars ? `${value.slice(0, maxChars)}...` : value;
+
+const buildProactivePageContext = (parts: WebsitePart[]): string => {
+  if (!Array.isArray(parts) || parts.length === 0) return "";
+
+  const headingCandidates = parts
+    .filter((part) => /^h[1-6]$/i.test(part.tagName))
+    .map((part) => normalizeText(part.content))
+    .filter(Boolean)
+    .slice(0, 2);
+
+  const bodyCandidates = parts
+    .filter((part) => ["p", "li"].includes(part.tagName.toLowerCase()))
+    .map((part) => normalizeText(part.content))
+    .filter((text) => text.length > 20)
+    .slice(0, PROACTIVE_CONTEXT_MAX_ITEMS - headingCandidates.length);
+
+  const picked = [...headingCandidates, ...bodyCandidates]
+    .slice(0, PROACTIVE_CONTEXT_MAX_ITEMS)
+    .map((text) => `- ${truncateText(text, PROACTIVE_CONTEXT_MAX_CHARS)}`);
+
+  return picked.join("\n");
+};
+
+const fetchProactivePageContext = async (tabId: number): Promise<string> => {
+  try {
+    const response = (await chrome.tabs.sendMessage(tabId, {
+      type: ContentTasks.EXTRACT_PAGE_DATA,
+    })) as { parts?: WebsitePart[] };
+    const parts = Array.isArray(response?.parts) ? response.parts : [];
+    return buildProactivePageContext(parts);
+  } catch {
+    return "";
+  }
+};
+
+const createProactivePrompt = (
+  tabTitle: string,
+  url: string,
+  pageContext: string
+): string => {
+  const contextBlock =
+    pageContext.length > 0
+      ? `ページ内容の抜粋:\n${pageContext}`
+      : "ページ内容の抜粋: 取得できなかったため、タイトルとURLから推測してください。";
+
+  return [
     "あなたはブラウジング中のユーザーに寄り添う、カジュアルな日本語アシスタントです。",
     "ユーザーがこのページをしばらく読んでいます。",
     `ページタイトル: ${tabTitle}`,
     `URL: ${url}`,
-    "1〜2文で、押しつけず自然に話しかけてください。",
-    "ユーザーが何に興味を持ったかを尋ねるオープンな問いを必ず含めてください。",
+    contextBlock,
+    "以下の条件で3〜4文の話しかけを作ってください。",
+    "- ページ内容の具体語を1つ以上含める（例: 「◯◯の部分」）",
+    "- 面白い/気になる点へのコメントを1つ入れる",
+    "- 最後は興味を尋ねるオープンな質問で終える",
+    "- 挨拶だけの汎用文は禁止",
   ].join("\n");
+};
 
 const maybeSendProactiveMessage = async () => {
   const now = Date.now();
@@ -196,7 +254,12 @@ const maybeSendProactiveMessage = async () => {
     if (!isTrackableUrl(tab.url) || tab.url !== currentEngagement.url) return;
 
     const tabTitle = tab.title || "Untitled";
-    const prompt = createProactivePrompt(tabTitle, currentEngagement.url);
+    const pageContext = await fetchProactivePageContext(currentEngagement.tabId);
+    const prompt = createProactivePrompt(
+      tabTitle,
+      currentEngagement.url,
+      pageContext
+    );
     const agent = getAgent();
 
     await enqueueModelTask(() =>
